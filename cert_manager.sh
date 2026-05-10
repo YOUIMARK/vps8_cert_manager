@@ -69,8 +69,8 @@ api_post() { curl -sS --netrc-file "$NETRC_FILE" -X POST "${API_BASE}/$1" -d "$2
 log INFO "[${DOMAIN}] 定时任务开始"
 
 response=$(api_post "list" "domain=${DOMAIN}" 2>>"$LOG_FILE")
-expire_str=$(echo "$response" | grep -oP '"(expire|expiry|not_after|valid_to)"\s*:\s*"\K[^"]+' | head -1)
-[ -z "$expire_str" ] && expire_str=$(echo "$response" | grep -oP '"(expire|expiry|not_after|valid_to)"\s*:\s*\K[0-9]+' | head -1)
+expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
+[ -z "$expire_str" ] && expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\2/p' | head -1)
 
 if [ -z "$expire_str" ]; then
   log ERROR "[${DOMAIN}] 无法获取到期时间，原始响应：${response}"
@@ -124,7 +124,7 @@ for type in "${DOWNLOAD_TYPES[@]}"; do
     local raw
     raw=$(cat "$tmp_file")
     if echo "$raw" | grep -q '"content"\s*:'; then
-      grep -oP '"content"\s*:\s*"\K.*(?="\s*\}\s*,\s*"error")' <<< "$raw" \
+      sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
         | sed 's/\\n/\n/g; s|\\/|/|g' > "${tmp_file}.pem"
       mv "${tmp_file}.pem" "$tmp_file"
     fi
@@ -217,10 +217,10 @@ get_expiry_timestamp() {
   response=$(api_post "list" "domain=$1" 2>>"$LOG_FILE")
 
   local expire_str
-  expire_str=$(echo "$response" | grep -oP '"(expire|expiry|not_after|valid_to)"\s*:\s*"\K[^"]+' | head -1)
+  expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
 
   if [ -z "$expire_str" ]; then
-    expire_str=$(echo "$response" | grep -oP '"(expire|expiry|not_after|valid_to)"\s*:\s*\K[0-9]+' | head -1)
+    expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\2/p' | head -1)
     if [ -n "$expire_str" ]; then
       echo "$expire_str"; return 0
     fi
@@ -255,7 +255,7 @@ do_download() {
       local raw
       raw=$(cat "$tmp_file")
       if echo "$raw" | grep -q '"content"\s*:'; then
-        grep -oP '"content"\s*:\s*"\K.*(?="\s*\}\s*,\s*"error")' <<< "$raw" \
+        sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
           | sed 's/\\n/\n/g; s|\\/|/|g' > "${tmp_file}.pem"
         mv "${tmp_file}.pem" "$tmp_file"
       fi
@@ -283,7 +283,7 @@ do_renew() {
   if echo "$response" | grep -qiE '"error"\s*:\s*null'; then
     if echo "$response" | grep -qi '"status"\s*:\s*"already_issued"'; then
       local msg
-      msg=$(echo "$response" | grep -oP '"message"\s*:\s*"\K[^"]+' | head -1)
+      msg=$(echo "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
       echo -e "  ${YELLOW}${msg:-证书未到期，暂不需要续签}${NC}"
       log OK "[${domain}] 续签跳过（证书未到期）"
       return 2

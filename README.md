@@ -17,7 +17,7 @@
 只需下载一个文件：
 
 ```bash
-curl -O https://raw.githubusercontent.com/YOUIMARK/vps8_cert_manager/refs/heads/main/cert_manager.sh
+curl -O https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cert_manager.sh
 chmod +x cert_manager.sh
 bash cert_manager.sh
 ```
@@ -59,7 +59,7 @@ bash ~/vps8_cert_manager/cert_manager.sh
 
 - `bash` ≥ 4.0
 - `curl`
-- `grep`（需支持 `-P`，Linux 默认满足；macOS 需安装 GNU grep）
+- `grep` / `sed`（兼容 GNU、BusyBox 和 BSD 版本）
 
 ## 卸载
 
