@@ -23,6 +23,46 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# ---- 依赖检查与自动安装 ----
+detect_pkg_manager() {
+  command -v apt-get >/dev/null 2>&1 && echo "apt" && return
+  command -v apk     >/dev/null 2>&1 && echo "apk" && return
+  command -v yum     >/dev/null 2>&1 && echo "yum" && return
+  command -v dnf     >/dev/null 2>&1 && echo "dnf" && return
+  echo ""
+}
+
+ensure_tool() {
+  local binary="$1" pkg="$2"
+  command -v "$binary" >/dev/null 2>&1 && return 0
+
+  echo -e "  ${YELLOW}缺少依赖：${binary}，正在自动安装...${NC}"
+  local pm
+  pm=$(detect_pkg_manager)
+  case "$pm" in
+    apt) apt-get update -qq && apt-get install -y -qq "$pkg" ;;
+    apk) apk add --no-cache "$pkg" ;;
+    yum) yum install -y -q "$pkg" ;;
+    dnf) dnf install -y -q "$pkg" ;;
+    "") echo -e "  ${RED}未检测到包管理器，请手动安装 ${binary} 后重试${NC}"; return 1 ;;
+  esac
+  if ! command -v "$binary" >/dev/null 2>&1; then
+    echo -e "  ${RED}自动安装 ${binary} 失败，请手动安装后重试${NC}"
+    return 1
+  fi
+  echo -e "  ${GREEN}✓ ${binary} 已安装${NC}"
+}
+
+check_deps() {
+  local ok=0
+  ensure_tool "curl" "curl" || ok=1
+  # crontab 的包名因发行版而异：Debian/Ubuntu → cron, Alpine → dcron, CentOS → cronie
+  ensure_tool "crontab" "cron" 2>/dev/null || \
+    ensure_tool "crontab" "cronie" 2>/dev/null || \
+    ensure_tool "crontab" "dcron" || ok=1
+  return "$ok"
+}
+
 # ---- 初始化目录 ----
 init_dirs() {
   mkdir -p "${BASE_DIR}/logs"
@@ -627,6 +667,8 @@ main_menu() {
 # ============================================================
 # 入口
 # ============================================================
+echo -e "${BOLD}vps8 CertCenter 证书管理脚本${NC}"
+check_deps || exit 1
 init_dirs
 
 # 脚本自身不在 BASE_DIR 时，复制过去并提示用户，然后删除原文件
