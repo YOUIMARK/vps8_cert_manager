@@ -17,7 +17,7 @@
 只需下载一个文件：
 
 ```bash
-curl -O https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cert_manager.sh
+curl -O https://raw.githubusercontent.com/YOUIMARK/vps8_cert_manager/refs/heads/main/cert_manager.sh
 chmod +x cert_manager.sh
 bash cert_manager.sh
 ```
