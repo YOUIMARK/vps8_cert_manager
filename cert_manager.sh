@@ -29,6 +29,8 @@ detect_pkg_manager() {
   command -v apk     >/dev/null 2>&1 && echo "apk" && return
   command -v yum     >/dev/null 2>&1 && echo "yum" && return
   command -v dnf     >/dev/null 2>&1 && echo "dnf" && return
+  command -v pacman  >/dev/null 2>&1 && echo "pacman" && return
+  command -v zypper  >/dev/null 2>&1 && echo "zypper" && return
   echo ""
 }
 
@@ -44,6 +46,8 @@ ensure_tool() {
     apk) apk add --no-cache "$pkg" ;;
     yum) yum install -y -q "$pkg" ;;
     dnf) dnf install -y -q "$pkg" ;;
+    pacman) pacman -S --noconfirm "$pkg" ;;
+    zypper) zypper install -y "$pkg" ;;
     "") echo -e "  ${RED}未检测到包管理器，请手动安装 ${binary} 后重试${NC}"; return 1 ;;
   esac
   if ! command -v "$binary" >/dev/null 2>&1; then
@@ -55,6 +59,7 @@ ensure_tool() {
 
 check_deps() {
   local ok=0
+  ensure_tool "bash" "bash" || ok=1
   ensure_tool "curl" "curl" || ok=1
   # crontab 的包名因发行版而异：Debian/Ubuntu → cron, Alpine → dcron, CentOS → cronie
   ensure_tool "crontab" "cron" 2>/dev/null || \
@@ -93,7 +98,7 @@ DOWNLOAD_TYPES=("fullchain" "cert" "privkey")
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 
 if [ -z "$API_KEY" ]; then
-  echo "$(date) [ERROR] API Key 未配置" >> "$LOG_FILE"
+  echo "$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') [ERROR] API Key 未配置" >> "$LOG_FILE"
   exit 1
 fi
 
@@ -104,12 +109,46 @@ chmod 600 "$NETRC_FILE"
 echo "machine vps8.zz.cd login client password ${API_KEY}" > "$NETRC_FILE"
 trap 'rm -f "$NETRC_FILE"' EXIT
 
-api_post() { curl -sS --netrc-file "$NETRC_FILE" -X POST "${API_BASE}/$1" -d "$2"; }
+api_post() { curl -sS --connect-timeout 10 --max-time 30 --netrc-file "$NETRC_FILE" -X POST "${API_BASE}/$1" -d "$2"; }
+
+json_extract_content() {
+  local raw="$1" out="$2"
+  if command -v python3 >/dev/null 2>&1; then
+    echo "$raw" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    content = data.get('content', '')
+    if content:
+        sys.stdout.write(content)
+except Exception:
+    pass
+" > "$out" 2>/dev/null
+    [ -s "$out" ] && return 0
+  fi
+  sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
+    | sed 's/\\n/\n/g; s|\\/|/|g; s/"$//' > "$out"
+  return 0
+}
 
 log INFO "[${DOMAIN}] 定时任务开始"
 
 response=$(api_post "list" "domain=${DOMAIN}" 2>>"$LOG_FILE")
-expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
+expire_str=""
+if command -v python3 >/dev/null 2>&1; then
+  expire_str=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for key in ('expire', 'expiry', 'not_after', 'valid_to'):
+        if key in data and data[key] is not None:
+            print(data[key])
+            break
+except Exception:
+    pass
+" 2>/dev/null)
+fi
+[ -z "$expire_str" ] && expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
 [ -z "$expire_str" ] && expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\2/p' | head -1)
 
 if [ -z "$expire_str" ]; then
@@ -158,15 +197,15 @@ for type in "${DOWNLOAD_TYPES[@]}"; do
   dest_file="${dest_dir}/${type}.pem"
   tmp_file="${dest_file}.tmp"
   http_code=$(curl -sS -w "%{http_code}" -o "$tmp_file" \
+    --connect-timeout 10 --max-time 60 \
     --netrc-file "$NETRC_FILE" -X POST "${API_BASE}/download" \
     -d "domain=${DOMAIN}&type=${type}" 2>>"$LOG_FILE")
   if [ "$http_code" -eq 200 ] && [ -s "$tmp_file" ]; then
     local raw
     raw=$(cat "$tmp_file")
-    if echo "$raw" | grep -q '"content"\s*:'; then
-      sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
-        | sed 's/\\n/\n/g; s|\\/|/|g' > "${tmp_file}.pem"
-      mv "${tmp_file}.pem" "$tmp_file"
+    if echo "$raw" | grep -q '"content"'; then
+      json_extract_content "$raw" "${tmp_file}.pem"
+      [ -s "${tmp_file}.pem" ] && mv "${tmp_file}.pem" "$tmp_file"
     fi
     [ "$type" = "privkey" ] && chmod 600 "$tmp_file" || chmod 644 "$tmp_file"
     mv "$tmp_file" "$dest_file"
@@ -199,7 +238,9 @@ load_config() {
 }
 
 save_api_key() {
-  sed -i "s|^API_KEY=.*|API_KEY=$1|" "$CONFIG_FILE"
+  local escaped
+  escaped="${1//\\/\\\\}"; escaped="${escaped//&/\\&}"; escaped="${escaped//|/\\|}"
+  sed -i "s|^API_KEY=.*|API_KEY=${escaped}|" "$CONFIG_FILE"
 }
 
 load_domains() {
@@ -238,17 +279,21 @@ setup_netrc() {
 
 # ---- API 调用 ----
 api_post() {
-  curl -sS --netrc-file "$NETRC_FILE" \
+  curl -sS --connect-timeout 10 --max-time 30 \
+    --netrc-file "$NETRC_FILE" \
     -X POST "${API_BASE}/$1" \
     -d "$2"
 }
 
 # ---- 验证 API Key ----
 verify_api_key() {
-  local resp
-  resp=$(api_post "list" "domain=verify.test" 2>/dev/null)
-  echo "$resp" | grep -qiE '"error".*[Uu]nauth|[Ii]nvalid.*[Kk]ey|[Ff]orbidden' && return 1
-  return 0
+  local http_code
+  http_code=$(curl -sS -o /dev/null -w "%{http_code}" \
+    --connect-timeout 10 --max-time 30 \
+    --netrc-file "$NETRC_FILE" \
+    -X POST "${API_BASE}/list" \
+    -d "domain=verify.test" 2>/dev/null)
+  [ "$http_code" -eq 200 ] && return 0 || return 1
 }
 
 # ---- 解析到期时间戳 ----
@@ -257,7 +302,22 @@ get_expiry_timestamp() {
   response=$(api_post "list" "domain=$1" 2>>"$LOG_FILE")
 
   local expire_str
-  expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
+  # 优先用 python3 做 JSON 解析
+  if command -v python3 >/dev/null 2>&1; then
+    expire_str=$(echo "$response" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for key in ('expire', 'expiry', 'not_after', 'valid_to'):
+        if key in data and data[key] is not None:
+            print(data[key])
+            break
+except Exception:
+    pass
+" 2>/dev/null)
+  fi
+  # 降级：sed 提取
+  [ -z "$expire_str" ] && expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' | head -1)
 
   if [ -z "$expire_str" ]; then
     expire_str=$(echo "$response" | sed -n 's/.*"\(expire\|expiry\|not_after\|valid_to\)"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\2/p' | head -1)
@@ -267,11 +327,38 @@ get_expiry_timestamp() {
     echo "__RAW__${response}"; return 1
   fi
 
+  # 如果 python3 返回的是数字时间戳，直接返回
+  if [[ "$expire_str" =~ ^[0-9]+$ ]]; then
+    echo "$expire_str"; return 0
+  fi
+
   local ts
   ts=$(TZ='Asia/Shanghai' date -d "$expire_str" +%s 2>/dev/null || \
        TZ='Asia/Shanghai' date -j -f "%Y-%m-%dT%H:%M:%S" "$expire_str" +%s 2>/dev/null)
   [ -z "$ts" ] && return 1
   echo "$ts"
+}
+
+# ---- 从 JSON 响应中提取 content 字段（优先 python3，降级 sed） ----
+json_extract_content() {
+  local raw="$1" out="$2"
+  if command -v python3 >/dev/null 2>&1; then
+    echo "$raw" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    content = data.get('content', '')
+    if content:
+        sys.stdout.write(content)
+except Exception:
+    pass
+" > "$out" 2>/dev/null
+    [ -s "$out" ] && return 0
+  fi
+  # 降级：sed 最佳尝试
+  sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
+    | sed 's/\\n/\n/g; s|\\/|/|g; s/"$//' > "$out"
+  return 0
 }
 
 # ---- 下载证书 ----
@@ -286,18 +373,18 @@ do_download() {
 
     local http_code
     http_code=$(curl -sS -w "%{http_code}" -o "$tmp_file" \
+      --connect-timeout 10 --max-time 60 \
       --netrc-file "$NETRC_FILE" \
       -X POST "${API_BASE}/download" \
       -d "domain=${domain}&type=${type}" 2>>"$LOG_FILE")
 
     if [ "$http_code" -eq 200 ] && [ -s "$tmp_file" ]; then
-      # API 返回 JSON，证书内容在 content 字段中，需提取并解码 \n → 换行、\/ → /
+      # API 返回 JSON，证书内容在 content 字段中
       local raw
       raw=$(cat "$tmp_file")
-      if echo "$raw" | grep -q '"content"\s*:'; then
-        sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
-          | sed 's/\\n/\n/g; s|\\/|/|g' > "${tmp_file}.pem"
-        mv "${tmp_file}.pem" "$tmp_file"
+      if echo "$raw" | grep -q '"content"'; then
+        json_extract_content "$raw" "${tmp_file}.pem"
+        [ -s "${tmp_file}.pem" ] && mv "${tmp_file}.pem" "$tmp_file"
       fi
       [ "$type" = "privkey" ] && chmod 600 "$tmp_file" || chmod 644 "$tmp_file"
       mv "$tmp_file" "$dest_file"
@@ -345,11 +432,12 @@ add_cron() {
     return
   fi
 
-  (
-    crontab -l 2>/dev/null
-    echo "TZ=Asia/Shanghai"
-    echo "0 1 * * * ${script_path} ${domain} >> ${LOG_FILE} 2>&1"
-  ) | crontab -
+  local tmp_cron
+  tmp_cron=$(mktemp)
+  crontab -l 2>/dev/null > "$tmp_cron"
+  echo "0 1 * * * TZ=Asia/Shanghai ${script_path} ${domain} >> ${LOG_FILE} 2>&1" >> "$tmp_cron"
+  crontab "$tmp_cron"
+  rm -f "$tmp_cron"
   echo -e "${GREEN}✓ 已添加定时任务（每天北京时间 01:00 自动续签）${NC}"
   log INFO "[${domain}] 添加 crontab 自动续签"
 }
@@ -587,7 +675,7 @@ menu_uninstall() {
 
   local tmp
   tmp=$(mktemp)
-  crontab -l 2>/dev/null | grep -v "cert_cron.sh" | grep -v "cert_manager.sh" > "$tmp"
+  crontab -l 2>/dev/null | grep -vF "${BASE_DIR}/cert_cron.sh" | grep -vF "${BASE_DIR}/cert_manager.sh" > "$tmp"
   crontab "$tmp"
   rm -f "$tmp"
   echo -e "${GREEN}✓ 已清除 crontab${NC}"
@@ -627,6 +715,7 @@ first_run_or_check_key() {
         break
       else
         echo -e " ${RED}验证失败，请检查 API Key${NC}"
+        rm -f "$NETRC_FILE"
         API_KEY=""
       fi
     done

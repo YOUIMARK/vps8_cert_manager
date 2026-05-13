@@ -17,7 +17,7 @@
 只需下载一个文件：
 
 ```bash
-curl -O https://raw.githubusercontent.com/YOUIMARK/vps8_cert_manager/refs/heads/main/cert_manager.sh
+curl -O https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/cert_manager.sh
 chmod +x cert_manager.sh
 bash cert_manager.sh
 ```
@@ -55,11 +55,23 @@ bash ~/vps8_cert_manager/cert_manager.sh
     └── privkey.pem    (600)
 ```
 
+## 支持的系统
+
+| 发行版 | 包管理器 | 状态 |
+|--------|----------|------|
+| Debian / Ubuntu | apt | ✅ |
+| CentOS / RHEL 7 | yum | ✅ |
+| CentOS / RHEL 8+ / Fedora | dnf | ✅ |
+| Alpine Linux | apk | ✅（需安装 bash） |
+| Arch Linux | pacman | ✅ |
+| openSUSE | zypper | ✅ |
+
 ## 依赖
 
 - `bash` ≥ 4.0
 - `curl`
 - `grep` / `sed`（兼容 GNU、BusyBox 和 BSD 版本）
+- `python3`（推荐，用于 JSON 解析；无则降级 sed，不影响功能）
 
 ## 卸载
 
