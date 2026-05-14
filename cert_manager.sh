@@ -127,7 +127,10 @@ except Exception:
     [ -s "$out" ] && return 0
   fi
   sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
-    | sed 's/\\n/\n/g; s|\\/|/|g; s/"$//' > "$out"
+    | sed 's/\\n/\
+/g
+s|\\/|/|g
+s/"$//' > "$out"
   return 0
 }
 
@@ -355,9 +358,12 @@ except Exception:
 " > "$out" 2>/dev/null
     [ -s "$out" ] && return 0
   fi
-  # 降级：sed 最佳尝试
+  # 降级：sed 最佳尝试（POSIX 字面换行，兼容 GNU/BusyBox/BSD）
   sed 's/.*"content"[[:space:]]*:[[:space:]]*"//; s/"}[[:space:]]*,[[:space:]]*"error".*//; s/"[[:space:]]*,[[:space:]]*"error".*//' <<< "$raw" \
-    | sed 's/\\n/\n/g; s|\\/|/|g; s/"$//' > "$out"
+    | sed 's/\\n/\
+/g
+s|\\/|/|g
+s/"$//' > "$out"
   return 0
 }
 
@@ -406,15 +412,14 @@ do_renew() {
   local response
   response=$(api_post "renew" "domain=${domain}" 2>>"$LOG_FILE")
 
-  # "error":null 表示请求成功
+  if echo "$response" | grep -qi '"status"\s*:\s*"already_issued"'; then
+    local msg
+    msg=$(echo "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    echo -e "  ${YELLOW}${msg:-证书未到期，暂不需要续签}${NC}"
+    log OK "[${domain}] 续签跳过（证书未到期）"
+    return 2
+  fi
   if echo "$response" | grep -qiE '"error"\s*:\s*null'; then
-    if echo "$response" | grep -qi '"status"\s*:\s*"already_issued"'; then
-      local msg
-      msg=$(echo "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-      echo -e "  ${YELLOW}${msg:-证书未到期，暂不需要续签}${NC}"
-      log OK "[${domain}] 续签跳过（证书未到期）"
-      return 2
-    fi
     log OK "[${domain}] 续签请求成功"
     return 0
   fi
